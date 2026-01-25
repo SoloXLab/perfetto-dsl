@@ -179,16 +179,35 @@ slices = trace.slice(name="906975||||transition-leash").all()  # 在transition-l
 slices = trace.slice(name="playing|system_server||Transition|||Expected Timeline||||transition-leash").all()
 
 # 指定索引
-slices = trace.slice(name="playing|system_server||Transition|||Expected Timeline#0").all()  # 第一个匹配的slice
-slices = trace.slice(name="playing|system_server||Transition|||Expected Timeline#-1").all()  # 最后一个匹配的slice
-slices = trace.slice(name="906975||||transition-leash#0").all()  # 第一个匹配的图层slice
+slices = trace.slice(name="playing|system_server||Transition|||Expected Timeline#0").first()  # 第一个匹配的slice
+slices = trace.slice(name="playing|system_server||Transition|||Expected Timeline#-1").first()  # 最后一个匹配的slice
+slices = trace.slice(name="906975||||transition-leash#0").first()  # 第一个匹配的图层slice
 
 # 在时间范围查询中使用
 slices = trace.slice().before("playing|system_server||Transition#0").all()
 slices = trace.slice().after("906975|||Expected Timeline#1").all()
 slices = trace.slice().before("906975||||transition-leash#0").all()  # 使用图层语法
 slices = trace.slice().between("start_slice|process||thread", "end_slice|process||thread").all()
+
+# ⚠️ 注意：如果匹配多个slice且未指定索引，会抛出详细的错误信息，提示使用索引语法
 ```
+
+#### 两种查询方式对比
+
+**方式1：特殊语法（推荐用于精确匹配）**
+```python
+# 使用特殊语法，支持索引，自动处理多slice匹配
+slice_obj = trace.slice(name="playing|system_server||Transition#1").first()  # 第二个匹配的slice
+```
+
+**方式2：常规链式调用（推荐用于动态查询）**
+```python
+# 使用常规链式调用，需要手动处理多slice情况
+slices = trace.slice(name="playing").process(name="system_server").thread(name="Transition").all()
+slice_obj = slices[1] if len(slices) > 1 else slices[0]  # 手动选择第二个
+```
+
+**两种方式返回的Slice对象完全相同**，都支持所有方法和属性访问。
 
 ### 5. Args参数过滤 🆕
 
@@ -476,15 +495,16 @@ uv run pytest tests/test_basic_functionality.py -v
 - **基于Perfetto官方文档**: 严格按照Perfetto SQL表结构设计
 - **双重查询策略**: 支持通过process_track和thread_track两种方式获取进程信息
 - **智能信息显示**: Slice对象自动显示所有可用的关联信息（process、thread、track、pid、tid）
-- **缓存机制**: 避免重复查询相同数据
-- **错误处理**: 优雅处理数据不存在的情况，过滤'None'字符串
-- **类型安全**: 完整的类型注解
-- **高级Args参数支持**: 完整的args参数查询和过滤功能
-- **高级Slice定位语法**: 支持精确的slice定位，避免多slice匹配问题
+- **缓存机制**: 避免重复查询相同数据，提高性能
+- **错误处理**: 优雅处理数据不存在的情况，过滤'None'字符串，提供详细的错误信息
+- **类型安全**: 完整的类型注解，提高代码可读性和IDE支持
+- **高级Args参数支持**: 完整的args参数查询和过滤功能，支持统计操作
+- **高级Slice定位语法**: 支持精确的slice定位，避免多slice匹配问题，自动提示索引语法
 - **模糊匹配**: 支持SQL LIKE操作符的模糊匹配
 - **多JOIN支持**: 支持多个args参数的组合查询
-- **懒加载**: QueryBuilder支持直接打印，自动执行查询并显示结果
+- **懒加载**: QueryBuilder支持直接打印，自动执行查询并显示结果，只在需要时执行查询
 - **符号安全**: 使用安全的符号（|、||、|||、#）避免与slice名称冲突
+- **链式DSL设计**: 流畅的链式调用，支持复杂的查询组合
 
 ## 📝 使用示例
 
@@ -499,6 +519,56 @@ uv run pytest tests/test_basic_functionality.py -v
 - CPU使用率分析
 - CPU频率分析
 - CPU分组功能
+
+## ⚠️ 注意事项
+
+### 1. Trace对象管理
+```python
+# ✅ 推荐：使用with语句确保正确关闭TraceProcessor
+with Trace("trace_file.pftrace") as trace:
+    slices = trace.slice().all()
+
+# ❌ 不推荐：手动管理可能忘记关闭
+trace = Trace("trace_file.pftrace")
+slices = trace.slice().all()
+# 需要手动调用 trace.trace_processor.close()
+```
+
+### 2. 多Slice匹配处理
+```python
+# ✅ 使用索引语法精确匹配
+slice_obj = trace.slice(name="playing|system_server#1").first()  # 第二个匹配的slice
+
+# ⚠️ 如果匹配多个slice且未指定索引，会抛出错误并提示使用索引
+# 错误信息会显示所有匹配的slice，方便选择正确的索引
+```
+
+### 3. 查询性能优化
+```python
+# ✅ 使用count()方法获取数量（使用SQL COUNT，高效）
+count = trace.slice().process(name="app").count()
+
+# ❌ 不推荐：加载所有数据再计算长度（低效）
+slices = trace.slice().process(name="app").all()
+count = len(slices)  # 会加载所有数据到内存
+```
+
+### 4. Args参数访问
+```python
+# ✅ 推荐：先获取slice对象，再访问args
+slice_obj = trace.slice(id=123).first()
+args_dict = slice_obj.get_args()  # 或 slice_obj.args()
+
+# ✅ 也可以直接过滤
+slices = trace.slice().args("Layer name", "Surface").all()
+```
+
+### 5. CPU使用率返回值格式
+```python
+# CPU使用率返回小数格式 (1.0 = 100%)
+usage = trace.cpu_usage()  # 返回: 0.548378 (表示54.84%)
+print(f"CPU使用率: {usage*100:.2f}%")  # 输出: CPU使用率: 54.84%
+```
 
 ### 完整示例
 
@@ -551,9 +621,36 @@ with Trace("trace_file.pftrace") as trace:
         print(f"  {group_name} 组: {len(freq_info)} 个频点, 总时长: {total_duration/1000000:.2f}ms")
 ```
 
+## 📚 相关文档
+
+- **API文档**: 查看 `Trace_API文档.md` 获取完整的API参考
+- **项目分析**: 查看 `项目分析报告.md` 了解项目架构和设计思路
+
+## 🐛 已知问题
+
+1. **SQL注入风险**: 当前实现使用字符串拼接构建SQL，建议在生产环境中对用户输入进行验证和转义
+2. **性能优化**: 某些count()方法可能加载所有数据，建议使用SQL COUNT优化
+
+## 🔮 未来计划
+
+- [ ] 添加SQL参数化查询支持，提高安全性
+- [ ] 优化count()方法，使用SQL COUNT聚合函数
+- [ ] 添加更多聚合统计方法
+- [ ] 支持更多Perfetto数据类型
+- [ ] 添加查询结果缓存机制
+- [ ] 完善错误处理和日志系统
+
 ## 🤝 贡献
 
 欢迎提交Issue和Pull Request来改进这个项目！
+
+### 贡献指南
+
+1. Fork 本项目
+2. 创建特性分支 (`git checkout -b feature/AmazingFeature`)
+3. 提交更改 (`git commit -m 'Add some AmazingFeature'`)
+4. 推送到分支 (`git push origin feature/AmazingFeature`)
+5. 开启 Pull Request
 
 ## 📄 许可证
 
