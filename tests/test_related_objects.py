@@ -4,8 +4,8 @@
 
 import pytest
 from unittest.mock import Mock, patch
-from perfetto.dsl import Slice
-from perfetto.dsl.related_objects import RelatedObjectsAccessor
+from perfetto_trace_dsl.dsl import Slice
+from perfetto_trace_dsl.dsl.related_objects import RelatedObjectsAccessor
 
 
 class TestRelatedObjectsAccessor:

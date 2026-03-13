@@ -3,7 +3,7 @@ Slice类的单元测试
 """
 
 import pytest
-from perfetto.dsl import Slice
+from perfetto_trace_dsl.dsl import Slice
 
 
 class TestSlice:
