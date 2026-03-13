@@ -1,4 +1,4 @@
-from typing import Dict, Any, Optional, Union, Set, List, TYPE_CHECKING
+from typing import Dict, Any, Optional, Union, Set, List, TYPE_CHECKING, Tuple
 from dataclasses import dataclass
 import re
 
@@ -196,12 +196,21 @@ class Flow:
     slice_in: int
     name: Optional[str] = None
     args: Optional[Dict[str, Any]] = None
+    type: Optional[str] = None
+    category: Optional[str] = None
+    ts: Optional[int] = None
+    track_id: Optional[int] = None
     
     def get_arg(self, key: str, default: Any = None) -> Any:
         """获取参数值"""
         if self.args is None:
             return default
         return self.args.get(key, default)
+    
+    @property
+    def flow_id(self) -> int:
+        """OpenSpec兼容字段：flow_id"""
+        return self.id
     
     def to_dict(self) -> Dict[str, Any]:
         """转换为字典"""
@@ -210,7 +219,11 @@ class Flow:
             'slice_out': self.slice_out,
             'slice_in': self.slice_in,
             'name': self.name,
-            'args': self.args
+            'args': self.args,
+            'type': self.type,
+            'category': self.category,
+            'ts': self.ts,
+            'track_id': self.track_id
         }
     
     @classmethod
@@ -223,7 +236,11 @@ class Flow:
                 slice_out=getattr(data, 'slice_out', 0),
                 slice_in=getattr(data, 'slice_in', 0),
                 name=getattr(data, 'name', None),
-                args=getattr(data, 'args', None)
+                args=getattr(data, 'args', None),
+                type=getattr(data, 'type', None),
+                category=getattr(data, 'category', None),
+                ts=getattr(data, 'ts', None),
+                track_id=getattr(data, 'track_id', None)
             )
         else:
             # 如果是普通字典
@@ -232,7 +249,11 @@ class Flow:
                 slice_out=data['slice_out'],
                 slice_in=data['slice_in'],
                 name=data.get('name'),
-                args=data.get('args')
+                args=data.get('args'),
+                type=data.get('type'),
+                category=data.get('category'),
+                ts=data.get('ts'),
+                track_id=data.get('track_id')
             )
     
     def __str__(self) -> str:
@@ -240,6 +261,36 @@ class Flow:
     
     def __repr__(self) -> str:
         return self.__str__()
+
+
+@dataclass
+class FlowLink:
+    """flow对端关系对象：对端slice + flow属性"""
+    
+    slice: 'Slice'
+    flow: Flow
+
+
+class _SliceArgComparator:
+    """slice.arg(key) 返回的比较器"""
+
+    def __init__(self, builder: 'SliceQueryBuilder', key: str):
+        self._builder = builder
+        self._key = key
+
+    def compare(self, op: str, value: Any) -> 'SliceQueryBuilder':
+        return self._builder._add_slice_arg_comparison(self._key, op, value)
+
+
+class _FlowArgComparator:
+    """flow.arg(key) 返回的比较器"""
+
+    def __init__(self, builder: 'FlowLinkQueryBuilder', key: str):
+        self._builder = builder
+        self._key = key
+
+    def compare(self, op: str, value: Any) -> 'FlowLinkQueryBuilder':
+        return self._builder._add_flow_arg_comparison(self._key, op, value)
 
 
 class RelatedObjectsAccessor:
@@ -308,6 +359,246 @@ class RelatedObjectsAccessor:
         return self._track
 
 
+class FlowLinkQueryBuilder:
+    """针对单个slice的flow关联查询构建器，返回FlowLink对象"""
+
+    _OPERATOR_MAP = {
+        "==": "=",
+        "=": "=",
+        "!=": "!=",
+        ">": ">",
+        ">=": ">=",
+        "<": "<",
+        "<=": "<=",
+        "like": "LIKE",
+        "LIKE": "LIKE",
+    }
+
+    def __init__(self, trace_processor, base_slice: 'Slice', direction: str):
+        if direction not in ("out", "in"):
+            raise ValueError("direction must be 'out' or 'in'")
+        self.trace_processor = trace_processor
+        self.base_slice = base_slice
+        self.direction = direction
+        self.joins: List[str] = []
+        self.where_conditions: List[str] = []
+        self.limit_count: Optional[int] = None
+        self.order_by_clause: Optional[str] = None
+        self._executed = False
+        self._results: Optional[List[FlowLink]] = None
+        self._next_arg_alias = 0
+        self._flow_columns: Optional[Set[str]] = None
+
+    def _invalidate_cache(self):
+        self._executed = False
+        self._results = None
+
+    def _normalize_operator(self, op: str) -> str:
+        if op not in self._OPERATOR_MAP:
+            raise ValueError(f"Unsupported operator: {op}")
+        return self._OPERATOR_MAP[op]
+
+    def _sql_literal(self, value: Any) -> str:
+        if value is None:
+            return "NULL"
+        if isinstance(value, bool):
+            return "1" if value else "0"
+        if isinstance(value, (int, float)):
+            return str(value)
+        escaped = str(value).replace("'", "''")
+        return f"'{escaped}'"
+
+    def _get_flow_columns(self) -> Set[str]:
+        if self._flow_columns is not None:
+            return self._flow_columns
+        columns: Set[str] = set()
+        try:
+            rows = self.trace_processor.query("PRAGMA table_info(flow)")
+            for row in rows:
+                name = getattr(row, "name", None)
+                if name is None and hasattr(row, "__getitem__"):
+                    try:
+                        name = row[1]
+                    except Exception:
+                        name = None
+                if name:
+                    columns.add(name)
+        except Exception:
+            # 在mock环境中可能不存在PRAGMA，保留最小列集合
+            columns = {"id", "slice_out", "slice_in", "name", "arg_set_id"}
+        self._flow_columns = columns
+        return columns
+
+    def _flow_col_or_null(self, col: str, alias: str) -> str:
+        if col in self._get_flow_columns():
+            return f"flow.{col} AS {alias}"
+        return f"NULL AS {alias}"
+
+    def name(self, value: str) -> 'FlowLinkQueryBuilder':
+        self.where_conditions.append(f"flow.name = {self._sql_literal(value)}")
+        self._invalidate_cache()
+        return self
+
+    def arg(self, key: str) -> _FlowArgComparator:
+        return _FlowArgComparator(self, key)
+
+    def _add_flow_arg_comparison(self, key: str, op: str, value: Any) -> 'FlowLinkQueryBuilder':
+        normalized = self._normalize_operator(op)
+        if "arg_set_id" not in self._get_flow_columns():
+            # 当前trace的flow表无arg_set_id时，不可能命中flow args条件
+            self.where_conditions.append("1 = 0")
+            self._invalidate_cache()
+            return self
+
+        alias = f"flow_args_{self._next_arg_alias}"
+        self._next_arg_alias += 1
+        self.joins.append(f"JOIN args {alias} ON flow.arg_set_id = {alias}.arg_set_id")
+
+        key_condition = f"{alias}.key = {self._sql_literal(key)}"
+        if isinstance(value, str):
+            value_condition = f"{alias}.string_value {normalized} {self._sql_literal(value)}"
+        elif value is None:
+            value_condition = f"{alias}.display_value IS NULL" if normalized == "=" else f"{alias}.display_value IS NOT NULL"
+        else:
+            numeric_literal = self._sql_literal(value)
+            value_condition = f"(COALESCE({alias}.int_value, {alias}.real_value) {normalized} {numeric_literal})"
+
+        self.where_conditions.append(f"({key_condition} AND {value_condition})")
+        self._invalidate_cache()
+        return self
+
+    def order_by(self, clause: str) -> 'FlowLinkQueryBuilder':
+        self.order_by_clause = clause
+        self._invalidate_cache()
+        return self
+
+    def limit(self, count: int) -> 'FlowLinkQueryBuilder':
+        self.limit_count = count
+        self._invalidate_cache()
+        return self
+
+    def series(self) -> List[FlowLink]:
+        if self.order_by_clause is None:
+            self.order_by_clause = "peer.ts ASC"
+        return self._execute_query()
+
+    def first(self) -> Optional[FlowLink]:
+        return self.nth(0)
+
+    def nth(self, n: int) -> Optional[FlowLink]:
+        links = self.series()
+        if not links:
+            return None
+        if n < 0:
+            n = len(links) + n
+        if n < 0 or n >= len(links):
+            return None
+        return links[n]
+
+    def second(self) -> Optional[FlowLink]:
+        return self.nth(1)
+
+    def third(self) -> Optional[FlowLink]:
+        return self.nth(2)
+
+    def last(self) -> Optional[FlowLink]:
+        return self.nth(-1)
+
+    def count(self) -> int:
+        return len(self.series())
+
+    def _build_sql(self) -> str:
+        peer_join = "JOIN slice peer ON flow.slice_in = peer.id" if self.direction == "out" else "JOIN slice peer ON flow.slice_out = peer.id"
+        base_condition = f"flow.slice_out = {self.base_slice.id}" if self.direction == "out" else f"flow.slice_in = {self.base_slice.id}"
+
+        select_parts = [
+            "peer.*",
+            "flow.id AS flow_id",
+            "flow.slice_out AS flow_slice_out",
+            "flow.slice_in AS flow_slice_in",
+            self._flow_col_or_null("name", "flow_name"),
+            self._flow_col_or_null("type", "flow_type"),
+            self._flow_col_or_null("category", "flow_category"),
+            self._flow_col_or_null("ts", "flow_ts"),
+            self._flow_col_or_null("track_id", "flow_track_id"),
+            self._flow_col_or_null("arg_set_id", "flow_arg_set_id"),
+        ]
+
+        sql = "SELECT " + ", ".join(select_parts) + " FROM flow "
+        sql += peer_join
+        for join in self.joins:
+            sql += f" {join}"
+
+        all_conditions = [base_condition] + self.where_conditions
+        if all_conditions:
+            sql += " WHERE " + " AND ".join(all_conditions)
+        if self.order_by_clause:
+            sql += f" ORDER BY {self.order_by_clause}"
+        if self.limit_count is not None:
+            sql += f" LIMIT {self.limit_count}"
+        return sql
+
+    def _query_flow_args(self, arg_set_id: Optional[int]) -> Optional[Dict[str, Any]]:
+        if arg_set_id is None:
+            return None
+        try:
+            rows = self.trace_processor.query(
+                f"SELECT key, value_type, int_value, string_value, real_value, display_value FROM args WHERE arg_set_id = {arg_set_id}"
+            )
+        except Exception:
+            return None
+
+        result: Dict[str, Any] = {}
+        for row in rows:
+            key = getattr(row, "key", None)
+            if key is None:
+                continue
+            value_type = getattr(row, "value_type", None)
+            if value_type == "int":
+                value = getattr(row, "int_value", None)
+            elif value_type == "real":
+                value = getattr(row, "real_value", None)
+            elif value_type == "string":
+                value = getattr(row, "string_value", None)
+            else:
+                value = getattr(row, "display_value", None)
+            result[key] = value
+        return result if result else None
+
+    def _execute_query(self) -> List[FlowLink]:
+        if self._executed:
+            return self._results or []
+
+        sql = self._build_sql()
+        try:
+            rows = self.trace_processor.query(sql)
+        except Exception as e:
+            raise RuntimeError(f"Failed to execute flow link query: {e}")
+
+        results: List[FlowLink] = []
+        for row in rows:
+            peer_slice = Slice.from_dict(row)
+            if self.base_slice._query_builder is not None:
+                peer_slice.set_query_builder(self.base_slice._query_builder)
+
+            flow = Flow(
+                id=getattr(row, "flow_id", 0),
+                slice_out=getattr(row, "flow_slice_out", 0),
+                slice_in=getattr(row, "flow_slice_in", 0),
+                name=getattr(row, "flow_name", None),
+                type=getattr(row, "flow_type", None),
+                category=getattr(row, "flow_category", None),
+                ts=getattr(row, "flow_ts", None),
+                track_id=getattr(row, "flow_track_id", None),
+                args=self._query_flow_args(getattr(row, "flow_arg_set_id", None)),
+            )
+            results.append(FlowLink(slice=peer_slice, flow=flow))
+
+        self._results = results
+        self._executed = True
+        return results
+
+
 class SliceQueryBuilder:
     """查询构建器，支持链式调用构建复杂的Perfetto查询，支持懒加载"""
     
@@ -322,16 +613,78 @@ class SliceQueryBuilder:
         self._executed = False
         self.limit_count = None
         self.order_by_clause = None
+        self._offset = None
+        self._next_arg_alias = 0
+
+    _OPERATOR_MAP = {
+        "==": "=",
+        "=": "=",
+        "!=": "!=",
+        ">": ">",
+        ">=": ">=",
+        "<": "<",
+        "<=": "<=",
+        "like": "LIKE",
+        "LIKE": "LIKE",
+    }
+
+    def _invalidate_cache(self):
+        self._executed = False
+        self._results = None
+
+    def _normalize_operator(self, op: str) -> str:
+        if op not in self._OPERATOR_MAP:
+            raise ValueError(f"Unsupported operator: {op}")
+        return self._OPERATOR_MAP[op]
+
+    def _sql_literal(self, value: Any) -> str:
+        if value is None:
+            return "NULL"
+        if isinstance(value, bool):
+            return "1" if value else "0"
+        if isinstance(value, (int, float)):
+            return str(value)
+        escaped = str(value).replace("'", "''")
+        return f"'{escaped}'"
+
+    def _add_field_comparison(self, field: str, op: str, value: Any, table_alias: str = "slice") -> 'SliceQueryBuilder':
+        operator = self._normalize_operator(op)
+        self.where_conditions.append(f"{table_alias}.{field} {operator} {self._sql_literal(value)}")
+        self._invalidate_cache()
+        return self
+
+    def _apply_sugar_comparison(self, field: str, spec: Any):
+        if not isinstance(spec, (tuple, list)) or len(spec) != 2:
+            raise ValueError(f"{field} filter must be tuple/list like ('>=', value)")
+        op, value = spec
+        self._add_field_comparison(field, op, value, "slice")
     
     def slice(self, **kwargs) -> 'SliceQueryBuilder':
         """添加slice查询条件"""
+        kwargs = dict(kwargs)
+
         self.current_table = "slice"
         self.result_type = Slice
-        # 当 include_args 为 False 时，明确设置 sql_parts 为 slice.*
-        if not kwargs.get('include_args', True):
-            self.sql_parts = ["SELECT slice.* FROM slice"]
-        else:
-            self.sql_parts = ["SELECT slice.* FROM slice"]
+        self.sql_parts = ["SELECT slice.* FROM slice"]
+        self.joins = []
+        self.where_conditions = []
+        self.limit_count = None
+        self.order_by_clause = None
+        self._offset = None
+        self._next_arg_alias = 0
+        self._invalidate_cache()
+
+        # OpenSpec 语法糖
+        ts_spec = kwargs.pop("ts", None)
+        dur_spec = kwargs.pop("dur", None)
+        depth_spec = kwargs.pop("depth", None)
+        args_spec = kwargs.pop("args", None)
+        before_spec = kwargs.pop("before", None)
+        after_spec = kwargs.pop("after", None)
+        between_spec = kwargs.pop("between", None)
+        flow_out_name = kwargs.pop("flow_out_name", None)
+        flow_out_arg = kwargs.pop("flow_out_arg", None)
+        kwargs.pop("include_args", None)
         
         # 检查是否有args相关的过滤条件
         args_filters = {}
@@ -436,12 +789,12 @@ class SliceQueryBuilder:
                         # 注意：这里不应该添加name过滤条件，因为已经在特殊语法解析中添加了
                         pass
                 else:
-                    # 不包含特殊语法，使用常规name匹配
+                    # 保持兼容：slice(name=...) 默认模糊匹配
                     if not value.startswith('%'):
                         value = f'%{value}'
                     if not value.endswith('%'):
                         value = f'{value}%'
-                    self.where_conditions.append(f"slice.name LIKE '{value}'")
+                    self.where_conditions.append(f"slice.name LIKE {self._sql_literal(value)}")
             elif key == "duration_ms":
                 # 处理持续时间过滤
                 if isinstance(value, (int, float)):
@@ -456,8 +809,141 @@ class SliceQueryBuilder:
                     self.where_conditions.append(f"slice.{key} LIKE '{value}'")
                 else:
                     self.where_conditions.append(f"slice.{key} = {value}")
+
+        if ts_spec is not None:
+            self._apply_sugar_comparison("ts", ts_spec)
+        if dur_spec is not None:
+            self._apply_sugar_comparison("dur", dur_spec)
+        if depth_spec is not None:
+            self._apply_sugar_comparison("depth", depth_spec)
+
+        if args_spec is not None:
+            if not isinstance(args_spec, dict):
+                raise ValueError("slice(args=...) expects a dict")
+            for key, value in args_spec.items():
+                self.arg(key).compare("==", value)
+
+        if after_spec is not None:
+            self.after(after_spec)
+        if before_spec is not None:
+            self.before(before_spec)
+        if between_spec is not None:
+            if isinstance(between_spec, (tuple, list)):
+                if len(between_spec) == 1:
+                    self.between(between_spec[0])
+                elif len(between_spec) == 2:
+                    self.between(between_spec[0], between_spec[1])
+                else:
+                    raise ValueError("between sugar expects 1 or 2 boundaries")
+            else:
+                self.between(between_spec)
+
+        if flow_out_name is not None or flow_out_arg is not None:
+            self._add_flow_out_exists_filter(flow_out_name, flow_out_arg)
         
         return self
+
+    # ===== OpenSpec 基础属性链式接口 =====
+    def id(self, value: int) -> 'SliceQueryBuilder':
+        return self._add_field_comparison("id", "==", value)
+
+    def name(self, value: str) -> 'SliceQueryBuilder':
+        if "%" in value:
+            self.where_conditions.append(f"slice.name LIKE {self._sql_literal(value)}")
+        else:
+            self.where_conditions.append(f"slice.name = {self._sql_literal(value)}")
+        self._invalidate_cache()
+        return self
+
+    def ts(self, op: str, value: Union[int, float]) -> 'SliceQueryBuilder':
+        return self._add_field_comparison("ts", op, value)
+
+    def dur(self, op: str, value: Union[int, float]) -> 'SliceQueryBuilder':
+        return self._add_field_comparison("dur", op, value)
+
+    def depth(self, op: str, value: Union[int, float]) -> 'SliceQueryBuilder':
+        return self._add_field_comparison("depth", op, value)
+
+    def arg(self, key: str) -> _SliceArgComparator:
+        return _SliceArgComparator(self, key)
+
+    def _add_slice_arg_comparison(self, key: str, op: str, value: Any) -> 'SliceQueryBuilder':
+        operator = self._normalize_operator(op)
+        alias = f"args_cmp_{self._next_arg_alias}"
+        self._next_arg_alias += 1
+        self.joins.append(f"JOIN args {alias} ON slice.arg_set_id = {alias}.arg_set_id")
+
+        key_condition = f"{alias}.key = {self._sql_literal(key)}"
+        if isinstance(value, str):
+            value_condition = f"{alias}.string_value {operator} {self._sql_literal(value)}"
+        elif value is None:
+            value_condition = f"{alias}.display_value IS NULL" if operator == "=" else f"{alias}.display_value IS NOT NULL"
+        else:
+            value_condition = f"(COALESCE({alias}.int_value, {alias}.real_value) {operator} {self._sql_literal(value)})"
+
+        self.where_conditions.append(f"({key_condition} AND {value_condition})")
+        self._invalidate_cache()
+        return self
+
+    def descendants(self, **kwargs) -> 'SliceQueryBuilder':
+        """查询所有子孙slice（递归）"""
+        if self.current_table != "slice":
+            raise ValueError("descendants() can only be called after slice()")
+
+        base_sql = self._build_query_sql(self)
+        self.sql_parts = [f"""
+        WITH RECURSIVE descendant_tree(id) AS (
+            SELECT child.id
+            FROM slice child
+            WHERE child.parent_id IN (SELECT base.id FROM ({base_sql}) base)
+            UNION ALL
+            SELECT child.id
+            FROM slice child
+            JOIN descendant_tree dt ON child.parent_id = dt.id
+        )
+        SELECT slice.* FROM slice
+        JOIN descendant_tree dt ON slice.id = dt.id
+        """.strip()]
+        self.joins = []
+        self.where_conditions = []
+        self._offset = None
+        self._invalidate_cache()
+
+        for key, value in kwargs.items():
+            if isinstance(value, str):
+                self.where_conditions.append(f"slice.{key} LIKE {self._sql_literal(value)}")
+            else:
+                self.where_conditions.append(f"slice.{key} = {self._sql_literal(value)}")
+
+        return self
+
+    def _add_flow_out_exists_filter(self, flow_name: Optional[str], flow_args: Optional[Dict[str, Any]]):
+        flow_args = flow_args or {}
+        if not isinstance(flow_args, dict):
+            raise ValueError("flow_out_arg expects a dict")
+
+        subquery_joins: List[str] = []
+        subquery_conditions: List[str] = ["f.slice_out = slice.id"]
+        if flow_name is not None:
+            subquery_conditions.append(f"f.name = {self._sql_literal(flow_name)}")
+
+        for i, (key, value) in enumerate(flow_args.items()):
+            alias = f"farg_{i}"
+            subquery_joins.append(f"JOIN args {alias} ON f.arg_set_id = {alias}.arg_set_id")
+            key_condition = f"{alias}.key = {self._sql_literal(key)}"
+            if isinstance(value, str):
+                value_condition = f"{alias}.string_value = {self._sql_literal(value)}"
+            else:
+                value_condition = f"COALESCE({alias}.int_value, {alias}.real_value) = {self._sql_literal(value)}"
+            subquery_conditions.append(f"({key_condition} AND {value_condition})")
+
+        subquery = "SELECT 1 FROM flow f"
+        if subquery_joins:
+            subquery += " " + " ".join(subquery_joins)
+        subquery += " WHERE " + " AND ".join(subquery_conditions)
+
+        self.where_conditions.append(f"EXISTS ({subquery})")
+        self._invalidate_cache()
     
     def process(self, **kwargs) -> 'SliceQueryBuilder':
         """添加process查询条件"""
@@ -1717,7 +2203,7 @@ class SliceQueryBuilder:
                         new_builder.limit_count = 1
                         new_builder._offset = parsed['index']
                 else:
-                    # 没有指定索引，需要报错并显示所有匹配的slice
+                    # 没有指定索引，需要显式报错
                     self._raise_multiple_slices_error(slice_name, new_builder, slice_count)
         except ValueError:
             # 重新抛出ValueError（多slice错误）
@@ -1980,7 +2466,7 @@ class SliceQueryBuilder:
         Returns:
             str: SQL条件字符串
         """
-        if hasattr(slice_obj, 'ts'):
+        if isinstance(slice_obj, Slice):
             # 如果是Slice对象，直接使用其ts值
             return f"slice.ts < {slice_obj.ts}"
         else:
@@ -1998,7 +2484,7 @@ class SliceQueryBuilder:
         Returns:
             str: SQL条件字符串
         """
-        if hasattr(slice_obj, 'ts') and hasattr(slice_obj, 'dur'):
+        if isinstance(slice_obj, Slice):
             # 如果是Slice对象，直接使用其ts + dur值
             return f"slice.ts > {slice_obj.ts + slice_obj.dur}"
         else:
@@ -2019,7 +2505,7 @@ class SliceQueryBuilder:
         """
         if end_slice is None:
             # 只传入一个slice，使用其时间范围
-            if hasattr(start_slice, 'ts') and hasattr(start_slice, 'dur'):
+            if isinstance(start_slice, Slice):
                 # 如果是Slice对象，直接使用其时间范围
                 start_time = start_slice.ts
                 end_time = start_slice.ts + start_slice.dur
@@ -2033,16 +2519,15 @@ class SliceQueryBuilder:
                 """
         else:
             # 传入两个slice，使用第一个的开始时间和第二个的结束时间
-            if (hasattr(start_slice, 'ts') and hasattr(end_slice, 'ts') and 
-                hasattr(end_slice, 'dur')):
+            if isinstance(start_slice, Slice) and isinstance(end_slice, Slice):
                 # 如果都是Slice对象，直接使用其时间值
                 start_time = start_slice.ts
                 end_time = end_slice.ts + end_slice.dur
                 return f"(slice.ts < {end_time} AND slice.ts + slice.dur > {start_time})"
             else:
                 # 如果包含SliceQueryBuilder对象，构建子查询
-                start_sql = self._build_query_sql(start_slice) if not hasattr(start_slice, 'ts') else None
-                end_sql = self._build_query_sql(end_slice) if not hasattr(end_slice, 'ts') else None
+                start_sql = self._build_query_sql(start_slice) if not isinstance(start_slice, Slice) else None
+                end_sql = self._build_query_sql(end_slice) if not isinstance(end_slice, Slice) else None
                 
                 if start_sql and end_sql:
                     return f"""
@@ -2112,6 +2597,11 @@ class SliceQueryBuilder:
                 sql += f" LIMIT {self.limit_count}"
         
         try:
+            try:
+                from .counter_query_builder import Counter  # 延迟导入，避免循环依赖
+            except Exception:
+                Counter = None
+
             result = self.trace_processor.query(sql)
             results = []
             
@@ -2120,7 +2610,7 @@ class SliceQueryBuilder:
                     enhanced_slice = Slice.from_dict(row)
                     enhanced_slice.set_query_builder(self)
                     results.append(enhanced_slice)
-                elif self.result_type == Counter:
+                elif Counter is not None and self.result_type == Counter:
                     results.append(Counter.from_dict(row))
                 elif self.result_type == Track:
                     results.append(Track.from_dict(row))
@@ -2168,18 +2658,40 @@ class SliceQueryBuilder:
         return len(results) > 0
     
     def first(self):
-        """获取第一个结果"""
-        results = self._execute_query()
-        return results[0] if results else None
+        """获取第一个结果（时间升序）"""
+        return self.nth(0)
     
     def last(self):
-        """获取最后一个结果"""
-        results = self._execute_query()
-        return results[-1] if results else None
+        """获取最后一个结果（时间升序）"""
+        return self.nth(-1)
     
     def all(self):
         """获取所有结果"""
         return self._execute_query()
+
+    def series(self):
+        """返回时间升序结果列表"""
+        if self.current_table in {"slice", "slice_out", "slice_in"} and self.order_by_clause is None:
+            self.order_by_clause = f"{self.current_table}.ts ASC"
+            self._invalidate_cache()
+        return self._execute_query()
+
+    def nth(self, n: int):
+        """返回第n个结果（0-based，支持负索引）"""
+        results = self.series()
+        if not results:
+            return None
+        if n < 0:
+            n = len(results) + n
+        if n < 0 or n >= len(results):
+            return None
+        return results[n]
+
+    def second(self):
+        return self.nth(1)
+
+    def third(self):
+        return self.nth(2)
     
     def _counter_max(self, field: str = 'value') -> float:
         """
@@ -2325,296 +2837,117 @@ class SliceQueryBuilder:
         except Exception as e:
             raise RuntimeError(f"Failed to execute cumulative change query: {e}")
     
+    def _resolve_slice_attr_or_arg(self, slice_obj: 'Slice', attr_or_arg: str) -> Any:
+        attr_aliases = {
+            "duration": "duration_ms",  # 兼容旧接口
+            "duration_ns": "dur",
+        }
+        target = attr_aliases.get(attr_or_arg, attr_or_arg)
+
+        if hasattr(slice_obj, target):
+            attr_value = getattr(slice_obj, target)
+            if not callable(attr_value):
+                return attr_value
+        args = slice_obj.get_args() or {}
+        return args.get(attr_or_arg)
+
+    def _slice_numeric_values(self, attr_or_arg: str) -> List[float]:
+        raw_values = self.to_list(attr_or_arg)
+        numeric_values: List[float] = []
+        for value in raw_values:
+            if value is None:
+                continue
+            try:
+                numeric_values.append(float(value))
+            except (TypeError, ValueError):
+                continue
+        return numeric_values
+
     def max(self, field: str = None) -> float:
-        """
-        获取指定字段的最大值
-        
-        Args:
-            field: 要计算最大值的字段
-                - 对于slice查询，默认为'duration'
-                - 对于counter查询，默认为'value'
-            
-        Returns:
-            float: 最大值
-        """
         if self.current_table == "slice":
-            if field is None:
-                field = 'duration'
-            return self._slice_max(field)
-        elif self.current_table == "counter":
-            if field is None:
-                field = 'value'
-            return self._counter_max(field)
-        else:
-            raise ValueError("max() method is only available for slice or counter queries")
-    
-    def _slice_max(self, field: str = 'duration') -> float:
-        """
-        获取slice指定字段的最大值
-        
-        Args:
-            field: 要计算最大值的字段，默认为'duration'
-            
-        Returns:
-            float: 最大值（毫秒）
-        """
-        
-        # 构建聚合查询
-        if field == 'duration':
-            sql = "SELECT MAX(slice.dur / 1000000.0) as max_duration FROM slice"
-        else:
-            sql = f"SELECT MAX(slice.{field}) as max_value FROM slice"
-        
-        for join in self.joins:
-            sql += f" {join}"
-        
-        if self.where_conditions:
-            sql += " WHERE " + " AND ".join(self.where_conditions)
-        
-        try:
-            result = self.trace_processor.query(sql)
-            for row in result:
-                if field == 'duration':
-                    return getattr(row, 'max_duration', None)
-                else:
-                    return getattr(row, 'max_value', None)
-            return None
-        except Exception as e:
-            raise RuntimeError(f"Failed to execute slice max query: {e}")
-    
+            target = field or "duration"
+            values = [v for v in self.to_list(target) if v is not None]
+            return max(values) if values else None
+        if self.current_table == "counter":
+            return self._counter_max(field or "value")
+        raise ValueError("max() method is only available for slice or counter queries")
+
     def min(self, field: str = None) -> float:
-        """
-        获取指定字段的最小值
-        
-        Args:
-            field: 要计算最小值的字段
-                - 对于slice查询，默认为'duration'
-                - 对于counter查询，默认为'value'
-            
-        Returns:
-            float: 最小值
-        """
         if self.current_table == "slice":
-            if field is None:
-                field = 'duration'
-            return self._slice_min(field)
-        elif self.current_table == "counter":
-            if field is None:
-                field = 'value'
-            return self._counter_min(field)
-        else:
-            raise ValueError("min() method is only available for slice or counter queries")
-    
-    def _slice_min(self, field: str = 'duration') -> float:
-        """
-        获取slice指定字段的最小值
-        
-        Args:
-            field: 要计算最小值的字段，默认为'duration'
-            
-        Returns:
-            float: 最小值（毫秒）
-        """
-        
-        # 构建聚合查询
-        if field == 'duration':
-            sql = "SELECT MIN(slice.dur / 1000000.0) as min_duration FROM slice"
-        else:
-            sql = f"SELECT MIN(slice.{field}) as min_value FROM slice"
-        
-        for join in self.joins:
-            sql += f" {join}"
-        
-        if self.where_conditions:
-            sql += " WHERE " + " AND ".join(self.where_conditions)
-        
-        try:
-            result = self.trace_processor.query(sql)
-            for row in result:
-                if field == 'duration':
-                    return getattr(row, 'min_duration', None)
-                else:
-                    return getattr(row, 'min_value', None)
-            return None
-        except Exception as e:
-            raise RuntimeError(f"Failed to execute slice min query: {e}")
-    
-    def avg(self, field: str = None) -> float:
-        """
-        获取指定字段的平均值
-        
-        Args:
-            field: 要计算平均值的字段
-                - 对于slice查询，默认为'duration'
-                - 对于counter查询，默认为'value'
-            
-        Returns:
-            float: 平均值
-        """
+            target = field or "duration"
+            values = [v for v in self.to_list(target) if v is not None]
+            return min(values) if values else None
+        if self.current_table == "counter":
+            return self._counter_min(field or "value")
+        raise ValueError("min() method is only available for slice or counter queries")
+
+    def avg(self, field: str = None) -> Optional[float]:
         if self.current_table == "slice":
-            if field is None:
-                field = 'duration'
-            return self._slice_avg(field)
-        elif self.current_table == "counter":
-            if field is None:
-                field = 'value'
-            return self._counter_avg(field)
-        else:
-            raise ValueError("avg() method is only available for slice or counter queries")
-    
-    def _slice_avg(self, field: str = 'duration') -> float:
-        """
-        获取slice指定字段的平均值
-        
-        Args:
-            field: 要计算平均值的字段，默认为'duration'
-            
-        Returns:
-            float: 平均值（毫秒）
-        """
-        
-        # 构建聚合查询
-        if field == 'duration':
-            sql = "SELECT AVG(slice.dur / 1000000.0) as avg_duration FROM slice"
-        else:
-            sql = f"SELECT AVG(slice.{field}) as avg_value FROM slice"
-        
-        for join in self.joins:
-            sql += f" {join}"
-        
-        if self.where_conditions:
-            sql += " WHERE " + " AND ".join(self.where_conditions)
-        
-        try:
-            result = self.trace_processor.query(sql)
-            for row in result:
-                if field == 'duration':
-                    return getattr(row, 'avg_duration', None)
-                else:
-                    return getattr(row, 'avg_value', None)
-            return None
-        except Exception as e:
-            raise RuntimeError(f"Failed to execute slice avg query: {e}")
-    
-    def p90(self, field: str = 'duration') -> float:
-        """
-        获取slice指定字段的90百分位数
-        
-        Args:
-            field: 要计算百分位数的字段，默认为'duration'
-            
-        Returns:
-            float: 90百分位数（毫秒）
-        """
-        if self.current_table != "slice":
-            raise ValueError("p90() method is only available for slice queries")
-        
-        return self._calculate_percentile(field, 90)
-    
-    def p95(self, field: str = 'duration') -> float:
-        """
-        获取slice指定字段的95百分位数
-        
-        Args:
-            field: 要计算百分位数的字段，默认为'duration'
-            
-        Returns:
-            float: 95百分位数（毫秒）
-        """
-        if self.current_table != "slice":
-            raise ValueError("p95() method is only available for slice queries")
-        
-        return self._calculate_percentile(field, 95)
-    
-    def median(self, field: str = 'duration') -> float:
-        """
-        获取slice指定字段的中值（50百分位数）
-        
-        Args:
-            field: 要计算中值的字段，默认为'duration'
-            
-        Returns:
-            float: 中值（毫秒）
-        """
-        if self.current_table != "slice":
-            raise ValueError("median() method is only available for slice queries")
-        
-        return self._calculate_percentile(field, 50)
-    
-    def _calculate_percentile(self, field: str, percentile: int) -> float:
-        """
-        计算指定字段的百分位数
-        
-        Args:
-            field: 要计算百分位数的字段
-            percentile: 百分位数（0-100）
-            
-        Returns:
-            float: 百分位数值（毫秒）
-        """
-        try:
-            # 获取所有数据并计算百分位数
-            all_slices = self._execute_query()
-            if not all_slices:
-                return None
-            
-            # 提取字段值
-            if field == 'duration':
-                values = [slice.duration_ms for slice in all_slices]
-            else:
-                values = [getattr(slice, field, 0) for slice in all_slices]
-            
-            # 排序
-            values.sort()
-            
-            # 计算百分位数
+            target = field or "duration"
+            values = self._slice_numeric_values(target)
             if not values:
                 return None
-            
-            index = (percentile / 100.0) * (len(values) - 1)
-            if index.is_integer():
-                return values[int(index)]
-            else:
-                lower = values[int(index)]
-                upper = values[int(index) + 1]
-                return lower + (upper - lower) * (index - int(index))
-                
-        except Exception as e:
-            raise RuntimeError(f"Failed to execute percentile query: {e}")
-    
+            return sum(values) / len(values)
+        if self.current_table == "counter":
+            return self._counter_avg(field or "value")
+        raise ValueError("avg() method is only available for slice or counter queries")
+
+    def sum(self, field: str) -> Optional[float]:
+        if self.current_table != "slice":
+            raise ValueError("sum() method is only available for slice queries")
+        values = self._slice_numeric_values(field)
+        if not values:
+            return None
+        return sum(values)
+
+    def quantile(self, field: str, q: float) -> Optional[float]:
+        if self.current_table != "slice":
+            raise ValueError("quantile() method is only available for slice queries")
+        if q < 0 or q > 1:
+            raise ValueError("q must be in range [0, 1]")
+        values = self._slice_numeric_values(field)
+        if not values:
+            return None
+        values.sort()
+        if len(values) == 1:
+            return values[0]
+        index = q * (len(values) - 1)
+        lo = int(index)
+        hi = min(lo + 1, len(values) - 1)
+        if lo == hi:
+            return values[lo]
+        ratio = index - lo
+        return values[lo] + (values[hi] - values[lo]) * ratio
+
+    def p90(self, field: str = 'duration') -> Optional[float]:
+        return self.quantile(field, 0.9)
+
+    def p95(self, field: str = 'duration') -> Optional[float]:
+        return self.quantile(field, 0.95)
+
+    def median(self, field: str = 'duration') -> Optional[float]:
+        return self.quantile(field, 0.5)
+
+    def to_list(self, attr_or_arg: str) -> List[Any]:
+        if self.current_table != "slice":
+            raise ValueError("to_list() method is only available for slice queries")
+        slices = self.series()
+        return [self._resolve_slice_attr_or_arg(item, attr_or_arg) for item in slices]
+
     def count(self) -> int:
-        """
-        获取查询结果的数量
-        
-        Returns:
-            int: 结果数量
-        """
         if self.current_table == "slice":
             return self._slice_count()
-        elif self.current_table == "counter":
+        if self.current_table == "counter":
             return self._counter_count()
-        else:
-            # 通用计数方法
-            results = self._execute_query()
-            return len(results)
-    
+        return len(self._execute_query())
+
     def _slice_count(self) -> int:
-        """
-        获取slice查询结果的数量
-        
-        Returns:
-            int: slice数量
-        """
-        
-        # 构建计数查询
-        sql = "SELECT COUNT(*) as slice_count FROM slice"
-        
+        # 使用DISTINCT避免JOIN args时重复计数
+        sql = "SELECT COUNT(DISTINCT slice.id) as slice_count FROM slice"
         for join in self.joins:
             sql += f" {join}"
-        
         if self.where_conditions:
             sql += " WHERE " + " AND ".join(self.where_conditions)
-        
         try:
             result = self.trace_processor.query(sql)
             for row in result:
@@ -2727,7 +3060,7 @@ class Slice:
     @property
     def related(self) -> 'RelatedObjectsAccessor':
         """获取关联对象访问器"""
-        if not self._query_builder:
+        if self._query_builder is None:
             raise RuntimeError("SliceQueryBuilder not set for Slice. Cannot access related objects.")
         
         if self._related_objects is None:
@@ -2757,6 +3090,10 @@ class Slice:
         if args_dict is None:
             return default
         return args_dict.get(key, default)
+
+    def arg(self, key: str, default: Any = None) -> Any:
+        """OpenSpec别名：s.arg(key)"""
+        return self.get_arg(key, default)
     
     def input_id(self, default: str = None) -> Optional[str]:
         """
@@ -2807,7 +3144,7 @@ class Slice:
     
     def get_process_name(self) -> str:
         """获取进程名"""
-        if not self._query_builder:
+        if self._query_builder is None:
             return ""
         
         try:
@@ -2843,7 +3180,7 @@ class Slice:
     
     def get_thread_name(self) -> str:
         """获取线程名"""
-        if not self._query_builder:
+        if self._query_builder is None:
             return ""
         
         try:
@@ -2866,7 +3203,7 @@ class Slice:
     
     def get_track_name(self) -> str:
         """获取 track 名"""
-        if not self._query_builder:
+        if self._query_builder is None:
             return ""
         
         try:
@@ -2885,7 +3222,7 @@ class Slice:
     
     def get_upid(self) -> Optional[int]:
         """获取进程的upid"""
-        if not self._query_builder:
+        if self._query_builder is None:
             return None
         
         try:
@@ -2919,7 +3256,7 @@ class Slice:
     
     def get_utid(self) -> Optional[int]:
         """获取线程的utid"""
-        if not self._query_builder:
+        if self._query_builder is None:
             return None
         
         try:
@@ -2939,7 +3276,7 @@ class Slice:
     
     def get_pid(self) -> Optional[int]:
         """获取进程的pid"""
-        if not self._query_builder:
+        if self._query_builder is None:
             return None
         
         try:
@@ -2975,7 +3312,7 @@ class Slice:
     
     def get_tid(self) -> Optional[int]:
         """获取线程的tid"""
-        if not self._query_builder:
+        if self._query_builder is None:
             return None
         
         try:
@@ -2996,7 +3333,7 @@ class Slice:
     
     def get_args(self) -> Optional[Dict[str, Any]]:
         """获取slice的args参数"""
-        if not self._query_builder:
+        if self._query_builder is None:
             return None
         
         try:
@@ -3058,7 +3395,7 @@ class Slice:
         """
         # 如果提供了value，进行过滤
         if value is not None:
-            if not self._query_builder:
+            if self._query_builder is None:
                 raise RuntimeError("SliceQueryBuilder not set for Slice. Cannot perform args filtering.")
             
             # 延迟导入避免循环导入
@@ -3096,7 +3433,7 @@ class Slice:
     
     def args_filter(self, **kwargs) -> List['Slice']:
         """基于args进行过滤查询，返回匹配的slice列表"""
-        if not self._query_builder:
+        if self._query_builder is None:
             raise RuntimeError("SliceQueryBuilder not set for Slice. Cannot perform args filtering.")
         
         # 延迟导入避免循环导入
@@ -3127,7 +3464,7 @@ class Slice:
     
     def child(self, level: int = 1, **kwargs):
         """查找子节点，支持链式调用"""
-        if not self._query_builder:
+        if self._query_builder is None:
             raise RuntimeError("SliceQueryBuilder not set for Slice. Cannot perform child query.")
         
         # 创建新的查询构建器，基于当前 slice 查找子节点
@@ -3139,10 +3476,18 @@ class Slice:
         
         # 调用 child 方法
         return new_builder.child(level, **kwargs)
+
+    def descendants(self, **kwargs):
+        """查找所有子孙节点，支持链式调用"""
+        if self._query_builder is None:
+            raise RuntimeError("SliceQueryBuilder not set for Slice. Cannot perform descendants query.")
+        new_builder = self._query_builder.__class__(self._query_builder.trace_processor)
+        new_builder.slice(id=self.id)
+        return new_builder.descendants(**kwargs)
     
     def parent(self, level: int = 1, **kwargs):
         """查找父节点，支持链式调用"""
-        if not self._query_builder:
+        if self._query_builder is None:
             raise RuntimeError("SliceQueryBuilder not set for Slice. Cannot perform parent query.")
         
         # 特殊处理 level=-1 的情况
@@ -3214,7 +3559,7 @@ class Slice:
     
     def siblings(self, **kwargs):
         """查找兄弟节点，支持链式调用"""
-        if not self._query_builder:
+        if self._query_builder is None:
             raise RuntimeError("SliceQueryBuilder not set for Slice. Cannot perform siblings query.")
         
         # 创建新的查询构建器，基于当前 slice 查找兄弟节点
@@ -3228,40 +3573,28 @@ class Slice:
         return new_builder.siblings(**kwargs)
     
     def flow_out(self, **kwargs):
-        """查找通过 flow 关联的 slice_out（输出 slice），支持链式调用"""
-        if not self._query_builder:
+        """查找当前slice作为source时的flow对端（FlowLink）"""
+        if self._query_builder is None:
             raise RuntimeError("SliceQueryBuilder not set for Slice. Cannot perform flow_out query.")
-        
-        # 创建新的查询构建器，基于当前 slice 查找 flow_out
-        new_builder = self._query_builder.__class__(self._query_builder.trace_processor)
-        new_builder.current_table = "slice"
-        new_builder.result_type = self._query_builder.result_type
-        new_builder.sql_parts = ["SELECT slice_out.* FROM slice"]
-        new_builder.where_conditions = [f"slice.id = {self.id}"]
-        
-        # 复制原始的 JOIN 信息，这样 flow_out 方法可以检测到 process/thread JOIN
-        new_builder.joins = self._query_builder.joins.copy()
-        
-        # 调用 flow_out 方法
-        return new_builder.flow_out(**kwargs)
+        builder = FlowLinkQueryBuilder(self._query_builder.trace_processor, self, "out")
+        if "name" in kwargs:
+            builder.name(kwargs["name"])
+        if "args" in kwargs and isinstance(kwargs["args"], dict):
+            for key, value in kwargs["args"].items():
+                builder.arg(key).compare("==", value)
+        return builder
     
     def flow_in(self, **kwargs):
-        """查找通过 flow 关联的 slice_in（输入 slice），支持链式调用"""
-        if not self._query_builder:
+        """查找当前slice作为sink时的flow对端（FlowLink）"""
+        if self._query_builder is None:
             raise RuntimeError("SliceQueryBuilder not set for Slice. Cannot perform flow_in query.")
-        
-        # 创建新的查询构建器，基于当前 slice 查找 flow_in
-        new_builder = self._query_builder.__class__(self._query_builder.trace_processor)
-        new_builder.current_table = "slice"
-        new_builder.result_type = self._query_builder.result_type
-        new_builder.sql_parts = ["SELECT slice_in.* FROM slice"]
-        new_builder.where_conditions = [f"slice.id = {self.id}"]
-        
-        # 复制原始的 JOIN 信息，这样 flow_in 方法可以检测到 process/thread JOIN
-        new_builder.joins = self._query_builder.joins.copy()
-        
-        # 调用 flow_in 方法
-        return new_builder.flow_in(**kwargs)
+        builder = FlowLinkQueryBuilder(self._query_builder.trace_processor, self, "in")
+        if "name" in kwargs:
+            builder.name(kwargs["name"])
+        if "args" in kwargs and isinstance(kwargs["args"], dict):
+            for key, value in kwargs["args"].items():
+                builder.arg(key).compare("==", value)
+        return builder
     
     def to_dict(self) -> Dict[str, Any]:
         """转换为字典"""
