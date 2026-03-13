@@ -62,7 +62,7 @@ def test_openspec_slice_sugar_supports_tuple_and_args():
     )
 
     assert "slice.id = 123" in builder.where_conditions
-    assert "slice.name = 'doFrame'" in builder.where_conditions
+    assert "slice.name LIKE '%doFrame%'" in builder.where_conditions
     assert "slice.ts >= 1000" in builder.where_conditions
     assert "slice.dur < 5000" in builder.where_conditions
     assert "slice.depth >= 1" in builder.where_conditions

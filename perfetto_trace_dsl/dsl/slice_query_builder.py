@@ -789,11 +789,12 @@ class SliceQueryBuilder:
                         # 注意：这里不应该添加name过滤条件，因为已经在特殊语法解析中添加了
                         pass
                 else:
-                    # OpenSpec默认精确匹配；含通配符时保留LIKE行为
-                    if "%" in value:
-                        self.where_conditions.append(f"slice.name LIKE {self._sql_literal(value)}")
-                    else:
-                        self.where_conditions.append(f"slice.name = {self._sql_literal(value)}")
+                    # 保持兼容：slice(name=...) 默认模糊匹配
+                    if not value.startswith('%'):
+                        value = f'%{value}'
+                    if not value.endswith('%'):
+                        value = f'{value}%'
+                    self.where_conditions.append(f"slice.name LIKE {self._sql_literal(value)}")
             elif key == "duration_ms":
                 # 处理持续时间过滤
                 if isinstance(value, (int, float)):
@@ -2202,9 +2203,8 @@ class SliceQueryBuilder:
                         new_builder.limit_count = 1
                         new_builder._offset = parsed['index']
                 else:
-                    # OpenSpec下默认选择时间升序第一个
-                    new_builder.order_by_clause = "slice.ts ASC"
-                    new_builder.limit_count = 1
+                    # 没有指定索引，需要显式报错
+                    self._raise_multiple_slices_error(slice_name, new_builder, slice_count)
         except ValueError:
             # 重新抛出ValueError（多slice错误）
             raise
@@ -2466,7 +2466,7 @@ class SliceQueryBuilder:
         Returns:
             str: SQL条件字符串
         """
-        if hasattr(slice_obj, 'ts'):
+        if isinstance(slice_obj, Slice):
             # 如果是Slice对象，直接使用其ts值
             return f"slice.ts < {slice_obj.ts}"
         else:
@@ -2484,7 +2484,7 @@ class SliceQueryBuilder:
         Returns:
             str: SQL条件字符串
         """
-        if hasattr(slice_obj, 'ts') and hasattr(slice_obj, 'dur'):
+        if isinstance(slice_obj, Slice):
             # 如果是Slice对象，直接使用其ts + dur值
             return f"slice.ts > {slice_obj.ts + slice_obj.dur}"
         else:
@@ -2505,7 +2505,7 @@ class SliceQueryBuilder:
         """
         if end_slice is None:
             # 只传入一个slice，使用其时间范围
-            if hasattr(start_slice, 'ts') and hasattr(start_slice, 'dur'):
+            if isinstance(start_slice, Slice):
                 # 如果是Slice对象，直接使用其时间范围
                 start_time = start_slice.ts
                 end_time = start_slice.ts + start_slice.dur
@@ -2519,16 +2519,15 @@ class SliceQueryBuilder:
                 """
         else:
             # 传入两个slice，使用第一个的开始时间和第二个的结束时间
-            if (hasattr(start_slice, 'ts') and hasattr(end_slice, 'ts') and 
-                hasattr(end_slice, 'dur')):
+            if isinstance(start_slice, Slice) and isinstance(end_slice, Slice):
                 # 如果都是Slice对象，直接使用其时间值
                 start_time = start_slice.ts
                 end_time = end_slice.ts + end_slice.dur
                 return f"(slice.ts < {end_time} AND slice.ts + slice.dur > {start_time})"
             else:
                 # 如果包含SliceQueryBuilder对象，构建子查询
-                start_sql = self._build_query_sql(start_slice) if not hasattr(start_slice, 'ts') else None
-                end_sql = self._build_query_sql(end_slice) if not hasattr(end_slice, 'ts') else None
+                start_sql = self._build_query_sql(start_slice) if not isinstance(start_slice, Slice) else None
+                end_sql = self._build_query_sql(end_slice) if not isinstance(end_slice, Slice) else None
                 
                 if start_sql and end_sql:
                     return f"""
@@ -2598,6 +2597,11 @@ class SliceQueryBuilder:
                 sql += f" LIMIT {self.limit_count}"
         
         try:
+            try:
+                from .counter_query_builder import Counter  # 延迟导入，避免循环依赖
+            except Exception:
+                Counter = None
+
             result = self.trace_processor.query(sql)
             results = []
             
@@ -2606,7 +2610,7 @@ class SliceQueryBuilder:
                     enhanced_slice = Slice.from_dict(row)
                     enhanced_slice.set_query_builder(self)
                     results.append(enhanced_slice)
-                elif self.result_type == Counter:
+                elif Counter is not None and self.result_type == Counter:
                     results.append(Counter.from_dict(row))
                 elif self.result_type == Track:
                     results.append(Track.from_dict(row))
@@ -2841,7 +2845,9 @@ class SliceQueryBuilder:
         target = attr_aliases.get(attr_or_arg, attr_or_arg)
 
         if hasattr(slice_obj, target):
-            return getattr(slice_obj, target)
+            attr_value = getattr(slice_obj, target)
+            if not callable(attr_value):
+                return attr_value
         args = slice_obj.get_args() or {}
         return args.get(attr_or_arg)
 
@@ -3054,7 +3060,7 @@ class Slice:
     @property
     def related(self) -> 'RelatedObjectsAccessor':
         """获取关联对象访问器"""
-        if not self._query_builder:
+        if self._query_builder is None:
             raise RuntimeError("SliceQueryBuilder not set for Slice. Cannot access related objects.")
         
         if self._related_objects is None:
@@ -3138,7 +3144,7 @@ class Slice:
     
     def get_process_name(self) -> str:
         """获取进程名"""
-        if not self._query_builder:
+        if self._query_builder is None:
             return ""
         
         try:
@@ -3174,7 +3180,7 @@ class Slice:
     
     def get_thread_name(self) -> str:
         """获取线程名"""
-        if not self._query_builder:
+        if self._query_builder is None:
             return ""
         
         try:
@@ -3197,7 +3203,7 @@ class Slice:
     
     def get_track_name(self) -> str:
         """获取 track 名"""
-        if not self._query_builder:
+        if self._query_builder is None:
             return ""
         
         try:
@@ -3216,7 +3222,7 @@ class Slice:
     
     def get_upid(self) -> Optional[int]:
         """获取进程的upid"""
-        if not self._query_builder:
+        if self._query_builder is None:
             return None
         
         try:
@@ -3250,7 +3256,7 @@ class Slice:
     
     def get_utid(self) -> Optional[int]:
         """获取线程的utid"""
-        if not self._query_builder:
+        if self._query_builder is None:
             return None
         
         try:
@@ -3270,7 +3276,7 @@ class Slice:
     
     def get_pid(self) -> Optional[int]:
         """获取进程的pid"""
-        if not self._query_builder:
+        if self._query_builder is None:
             return None
         
         try:
@@ -3306,7 +3312,7 @@ class Slice:
     
     def get_tid(self) -> Optional[int]:
         """获取线程的tid"""
-        if not self._query_builder:
+        if self._query_builder is None:
             return None
         
         try:
@@ -3327,7 +3333,7 @@ class Slice:
     
     def get_args(self) -> Optional[Dict[str, Any]]:
         """获取slice的args参数"""
-        if not self._query_builder:
+        if self._query_builder is None:
             return None
         
         try:
@@ -3389,7 +3395,7 @@ class Slice:
         """
         # 如果提供了value，进行过滤
         if value is not None:
-            if not self._query_builder:
+            if self._query_builder is None:
                 raise RuntimeError("SliceQueryBuilder not set for Slice. Cannot perform args filtering.")
             
             # 延迟导入避免循环导入
@@ -3427,7 +3433,7 @@ class Slice:
     
     def args_filter(self, **kwargs) -> List['Slice']:
         """基于args进行过滤查询，返回匹配的slice列表"""
-        if not self._query_builder:
+        if self._query_builder is None:
             raise RuntimeError("SliceQueryBuilder not set for Slice. Cannot perform args filtering.")
         
         # 延迟导入避免循环导入
@@ -3458,7 +3464,7 @@ class Slice:
     
     def child(self, level: int = 1, **kwargs):
         """查找子节点，支持链式调用"""
-        if not self._query_builder:
+        if self._query_builder is None:
             raise RuntimeError("SliceQueryBuilder not set for Slice. Cannot perform child query.")
         
         # 创建新的查询构建器，基于当前 slice 查找子节点
@@ -3473,7 +3479,7 @@ class Slice:
 
     def descendants(self, **kwargs):
         """查找所有子孙节点，支持链式调用"""
-        if not self._query_builder:
+        if self._query_builder is None:
             raise RuntimeError("SliceQueryBuilder not set for Slice. Cannot perform descendants query.")
         new_builder = self._query_builder.__class__(self._query_builder.trace_processor)
         new_builder.slice(id=self.id)
@@ -3481,7 +3487,7 @@ class Slice:
     
     def parent(self, level: int = 1, **kwargs):
         """查找父节点，支持链式调用"""
-        if not self._query_builder:
+        if self._query_builder is None:
             raise RuntimeError("SliceQueryBuilder not set for Slice. Cannot perform parent query.")
         
         # 特殊处理 level=-1 的情况
@@ -3553,7 +3559,7 @@ class Slice:
     
     def siblings(self, **kwargs):
         """查找兄弟节点，支持链式调用"""
-        if not self._query_builder:
+        if self._query_builder is None:
             raise RuntimeError("SliceQueryBuilder not set for Slice. Cannot perform siblings query.")
         
         # 创建新的查询构建器，基于当前 slice 查找兄弟节点
@@ -3568,7 +3574,7 @@ class Slice:
     
     def flow_out(self, **kwargs):
         """查找当前slice作为source时的flow对端（FlowLink）"""
-        if not self._query_builder:
+        if self._query_builder is None:
             raise RuntimeError("SliceQueryBuilder not set for Slice. Cannot perform flow_out query.")
         builder = FlowLinkQueryBuilder(self._query_builder.trace_processor, self, "out")
         if "name" in kwargs:
@@ -3580,7 +3586,7 @@ class Slice:
     
     def flow_in(self, **kwargs):
         """查找当前slice作为sink时的flow对端（FlowLink）"""
-        if not self._query_builder:
+        if self._query_builder is None:
             raise RuntimeError("SliceQueryBuilder not set for Slice. Cannot perform flow_in query.")
         builder = FlowLinkQueryBuilder(self._query_builder.trace_processor, self, "in")
         if "name" in kwargs:
