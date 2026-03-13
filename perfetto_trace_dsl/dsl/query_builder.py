@@ -4,6 +4,7 @@ Backward-compatible query builder exports.
 
 from .slice_query_builder import (
     Flow,
+    FlowLink,
     RelatedObjectsAccessor,
     Slice,
     SliceQueryBuilder,
@@ -18,5 +19,6 @@ __all__ = [
     "Slice",
     "Track",
     "Flow",
+    "FlowLink",
     "RelatedObjectsAccessor",
 ]

@@ -3,7 +3,7 @@ Perfetto DSL - Chainable DSL for Perfetto trace analysis
 """
 
 from .trace import Trace
-from .slice_query_builder import Slice, Track, Flow, SliceQueryBuilder, RelatedObjectsAccessor
+from .slice_query_builder import Slice, Track, Flow, FlowLink, SliceQueryBuilder, RelatedObjectsAccessor
 from .counter_query_builder import Counter, CounterQueryBuilder
 from .cpu_freq_query_builder import CpuFreqQueryBuilder, CpuFreqData
 from .cpu_usage_query_builder import CpuUsageQueryBuilder, CpuUsageData
@@ -19,6 +19,7 @@ __all__ = [
     "CounterQueryBuilder",
     "Track",
     "Flow",
+    "FlowLink",
     "QueryBuilder",
     "SliceQueryBuilder",
     "RelatedObjectsAccessor",
