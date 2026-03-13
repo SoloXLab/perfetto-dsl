@@ -6,7 +6,7 @@ import pytest
 import tempfile
 import os
 from unittest.mock import Mock, patch
-from perfetto.dsl import Trace
+from perfetto_trace_dsl.dsl import Trace
 
 
 class TestEnhancedSliceIntegration:
@@ -25,7 +25,7 @@ class TestEnhancedSliceIntegration:
         if os.path.exists(self.temp_file_path):
             os.unlink(self.temp_file_path)
     
-    @patch('perfetto.dsl.trace.TraceProcessor')
+    @patch('perfetto_trace_dsl.dsl.trace.TraceProcessor')
     def test_slice_process_name_access(self, mock_processor):
         """测试slice.process.name访问"""
         # 模拟slice查询结果
@@ -74,7 +74,7 @@ class TestEnhancedSliceIntegration:
             assert slice_obj.process.pid == 123
             assert slice_obj.process.upid == 456
     
-    @patch('perfetto.dsl.trace.TraceProcessor')
+    @patch('perfetto_trace_dsl.dsl.trace.TraceProcessor')
     def test_slice_thread_name_access(self, mock_processor):
         """测试slice.thread.name访问"""
         # 模拟slice查询结果
@@ -123,7 +123,7 @@ class TestEnhancedSliceIntegration:
             assert slice_obj.thread.tid == 456
             assert slice_obj.thread.utid == 789
     
-    @patch('perfetto.dsl.trace.TraceProcessor')
+    @patch('perfetto_trace_dsl.dsl.trace.TraceProcessor')
     def test_slice_track_access(self, mock_processor):
         """测试slice.track访问"""
         # 模拟slice查询结果
@@ -173,7 +173,7 @@ class TestEnhancedSliceIntegration:
         mock_track.args = None
         
         # 我们需要patch QueryBuilder的track方法
-        with patch('perfetto.dsl.query_builder.QueryBuilder.track') as mock_track_method:
+        with patch('perfetto_trace_dsl.dsl.query_builder.QueryBuilder.track') as mock_track_method:
             mock_track_query = Mock()
             mock_track_query.first.return_value = mock_track
             mock_track_method.return_value = mock_track_query
@@ -189,7 +189,7 @@ class TestEnhancedSliceIntegration:
                 assert track.type == "slice"
                 assert track.id == 789
     
-    @patch('perfetto.dsl.trace.TraceProcessor')
+    @patch('perfetto_trace_dsl.dsl.trace.TraceProcessor')
     def test_chain_access_pattern(self, mock_processor):
         """测试链式访问模式"""
         # 模拟slice查询结果
@@ -248,7 +248,7 @@ class TestEnhancedSliceIntegration:
             assert thread_name == "main_thread"
             # track查询可能失败，这里不强制要求
     
-    @patch('perfetto.dsl.trace.TraceProcessor')
+    @patch('perfetto_trace_dsl.dsl.trace.TraceProcessor')
     def test_multiple_slices_with_related_objects(self, mock_processor):
         """测试多个slice的关联对象访问"""
         # 模拟多个slice查询结果

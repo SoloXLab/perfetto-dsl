@@ -6,7 +6,7 @@ import pytest
 import os
 import tempfile
 from unittest.mock import Mock, patch
-from perfetto.dsl import Trace
+from perfetto_trace_dsl.dsl import Trace
 
 
 class TestTrace:
@@ -30,7 +30,7 @@ class TestTrace:
         finally:
             os.unlink(tmp_file_path)
     
-    @patch('perfetto.dsl.trace.TraceProcessor')
+    @patch('perfetto_trace_dsl.dsl.trace.TraceProcessor')
     def test_trace_initialization_success(self, mock_processor):
         """测试成功初始化"""
         # 创建临时文件
@@ -53,7 +53,7 @@ class TestTrace:
             # 清理临时文件
             os.unlink(tmp_file_path)
     
-    @patch('perfetto.dsl.trace.TraceProcessor')
+    @patch('perfetto_trace_dsl.dsl.trace.TraceProcessor')
     def test_trace_processor_property(self, mock_processor):
         """测试trace_processor属性"""
         with tempfile.NamedTemporaryFile(suffix='.pftrace', delete=False) as tmp_file:
@@ -75,7 +75,7 @@ class TestTrace:
         finally:
             os.unlink(tmp_file_path)
     
-    @patch('perfetto.dsl.trace.TraceProcessor')
+    @patch('perfetto_trace_dsl.dsl.trace.TraceProcessor')
     def test_context_manager(self, mock_processor):
         """测试上下文管理器"""
         with tempfile.NamedTemporaryFile(suffix='.pftrace', delete=False) as tmp_file:
@@ -95,7 +95,7 @@ class TestTrace:
         finally:
             os.unlink(tmp_file_path)
     
-    @patch('perfetto.dsl.trace.TraceProcessor')
+    @patch('perfetto_trace_dsl.dsl.trace.TraceProcessor')
     def test_slice_method(self, mock_processor):
         """测试slice方法"""
         with tempfile.NamedTemporaryFile(suffix='.pftrace', delete=False) as tmp_file:
@@ -119,7 +119,7 @@ class TestTrace:
         finally:
             os.unlink(tmp_file_path)
     
-    @patch('perfetto.dsl.trace.TraceProcessor')
+    @patch('perfetto_trace_dsl.dsl.trace.TraceProcessor')
     def test_counter_method(self, mock_processor):
         """测试counter方法"""
         with tempfile.NamedTemporaryFile(suffix='.pftrace', delete=False) as tmp_file:
@@ -138,7 +138,7 @@ class TestTrace:
         finally:
             os.unlink(tmp_file_path)
     
-    @patch('perfetto.dsl.trace.TraceProcessor')
+    @patch('perfetto_trace_dsl.dsl.trace.TraceProcessor')
     def test_track_method(self, mock_processor):
         """测试track方法"""
         with tempfile.NamedTemporaryFile(suffix='.pftrace', delete=False) as tmp_file:
@@ -157,7 +157,7 @@ class TestTrace:
         finally:
             os.unlink(tmp_file_path)
     
-    @patch('perfetto.dsl.trace.TraceProcessor')
+    @patch('perfetto_trace_dsl.dsl.trace.TraceProcessor')
     def test_flow_method(self, mock_processor):
         """测试flow方法"""
         with tempfile.NamedTemporaryFile(suffix='.pftrace', delete=False) as tmp_file:
@@ -176,7 +176,7 @@ class TestTrace:
         finally:
             os.unlink(tmp_file_path)
     
-    @patch('perfetto.dsl.trace.TraceProcessor')
+    @patch('perfetto_trace_dsl.dsl.trace.TraceProcessor')
     def test_query_method(self, mock_processor):
         """测试query方法"""
         with tempfile.NamedTemporaryFile(suffix='.pftrace', delete=False) as tmp_file:
@@ -207,7 +207,7 @@ class TestTrace:
         finally:
             os.unlink(tmp_file_path)
     
-    @patch('perfetto.dsl.trace.TraceProcessor')
+    @patch('perfetto_trace_dsl.dsl.trace.TraceProcessor')
     def test_query_method_error(self, mock_processor):
         """测试query方法的错误处理"""
         with tempfile.NamedTemporaryFile(suffix='.pftrace', delete=False) as tmp_file:

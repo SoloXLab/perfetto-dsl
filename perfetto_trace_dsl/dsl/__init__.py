@@ -9,6 +9,9 @@ from .cpu_freq_query_builder import CpuFreqQueryBuilder, CpuFreqData
 from .cpu_usage_query_builder import CpuUsageQueryBuilder, CpuUsageData
 from .metric_query_builder import MetricQueryBuilder
 
+# Backward-compatible alias used by existing callers/tests.
+QueryBuilder = SliceQueryBuilder
+
 __all__ = [
     "Trace",
     "Slice", 
@@ -16,6 +19,7 @@ __all__ = [
     "CounterQueryBuilder",
     "Track",
     "Flow",
+    "QueryBuilder",
     "SliceQueryBuilder",
     "RelatedObjectsAccessor",
     "CpuFreqQueryBuilder",

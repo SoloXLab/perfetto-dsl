@@ -1,7 +1,7 @@
 import pytest
-from perfetto.dsl import Trace, Slice, Counter, Track, Flow
-from perfetto.dsl.query_builder import QueryBuilder
-from perfetto.dsl.related_objects import RelatedObjectsAccessor
+from perfetto_trace_dsl.dsl import Trace, Slice, Counter, Track, Flow
+from perfetto_trace_dsl.dsl.query_builder import QueryBuilder
+from perfetto_trace_dsl.dsl.related_objects import RelatedObjectsAccessor
 
 
 class TestBasicFunctionality:

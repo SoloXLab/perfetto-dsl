@@ -6,7 +6,7 @@ import pytest
 import tempfile
 import os
 from unittest.mock import Mock, patch
-from perfetto.dsl import Trace, Slice, Counter, Track, Flow
+from perfetto_trace_dsl.dsl import Trace, Slice, Counter, Track, Flow
 
 
 class TestIntegration:
@@ -25,7 +25,7 @@ class TestIntegration:
         if os.path.exists(self.temp_file_path):
             os.unlink(self.temp_file_path)
     
-    @patch('perfetto.dsl.trace.TraceProcessor')
+    @patch('perfetto_trace_dsl.dsl.trace.TraceProcessor')
     def test_basic_slice_query(self, mock_processor):
         """测试基本的slice查询"""
         # 模拟查询结果
@@ -67,7 +67,7 @@ class TestIntegration:
             assert len(slices) == 1
             assert isinstance(slices[0], Slice)
     
-    @patch('perfetto.dsl.trace.TraceProcessor')
+    @patch('perfetto_trace_dsl.dsl.trace.TraceProcessor')
     def test_chain_query(self, mock_processor):
         """测试链式查询"""
         # 模拟查询结果
@@ -107,7 +107,7 @@ class TestIntegration:
             assert "process.name = 'test_process'" in call_args
             assert "thread.name = 'test_thread'" in call_args
     
-    @patch('perfetto.dsl.trace.TraceProcessor')
+    @patch('perfetto_trace_dsl.dsl.trace.TraceProcessor')
     def test_multiple_data_types(self, mock_processor):
         """测试多种数据类型查询"""
         mock_processor_instance = Mock()
@@ -154,7 +154,7 @@ class TestIntegration:
             assert first_track.name == "test_track"
             assert first_track.type == "slice"
     
-    @patch('perfetto.dsl.trace.TraceProcessor')
+    @patch('perfetto_trace_dsl.dsl.trace.TraceProcessor')
     def test_error_handling(self, mock_processor):
         """测试错误处理"""
         mock_processor_instance = Mock()
@@ -167,7 +167,7 @@ class TestIntegration:
             with pytest.raises(RuntimeError, match="Failed to execute query"):
                 trace.slice().first()
     
-    @patch('perfetto.dsl.trace.TraceProcessor')
+    @patch('perfetto_trace_dsl.dsl.trace.TraceProcessor')
     def test_lazy_loading_caching(self, mock_processor):
         """测试懒加载缓存机制"""
         # 模拟查询结果
@@ -202,7 +202,7 @@ class TestIntegration:
             # 验证结果相同
             assert first_slice.id == first_slice_again.id
     
-    @patch('perfetto.dsl.trace.TraceProcessor')
+    @patch('perfetto_trace_dsl.dsl.trace.TraceProcessor')
     def test_string_representation(self, mock_processor):
         """测试字符串表示"""
         # 模拟查询结果
@@ -231,7 +231,7 @@ class TestIntegration:
             # 由于懒加载，当只有一个结果时，会直接显示Slice对象
             assert "Slice(id=1, name='test_slice'" in str_repr
     
-    @patch('perfetto.dsl.trace.TraceProcessor')
+    @patch('perfetto_trace_dsl.dsl.trace.TraceProcessor')
     def test_backward_compatibility(self, mock_processor):
         """测试向后兼容性"""
         # 模拟查询结果

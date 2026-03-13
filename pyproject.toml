@@ -3,7 +3,7 @@ requires = ["setuptools>=61.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "perfetto-dsl"
+name = "perfetto-trace-dsl"
 version = "1.0.0"
 description = "A Python DSL for Perfetto trace files with chainable queries"
 authors = [
@@ -25,7 +25,6 @@ classifiers = [
 ]
 dependencies = [
     "perfetto>=0.14.0",
-    "pytest>=8.3.5",
 ]
 
 [project.optional-dependencies]
@@ -41,7 +40,7 @@ Issues = "https://github.com/your-repo/perfetto-dsl/issues"
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["perfetto*"]
+include = ["perfetto_trace_dsl*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

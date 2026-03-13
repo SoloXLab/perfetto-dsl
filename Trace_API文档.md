@@ -360,7 +360,7 @@ result = trace.metric("android_cpu")  # 返回指定 metric 的结果字典
 ### 完整示例
 
 ```python
-from perfetto.dsl import Trace
+from perfetto_trace_dsl.dsl import Trace
 
 with Trace("trace_file.pftrace") as trace:
     # 1. Slice 查询

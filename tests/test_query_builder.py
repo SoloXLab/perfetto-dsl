@@ -4,7 +4,7 @@ QueryBuilder类的单元测试
 
 import pytest
 from unittest.mock import Mock
-from perfetto.dsl import QueryBuilder, Slice, Counter, Track, Flow
+from perfetto_trace_dsl.dsl import QueryBuilder, Slice, Counter, Track, Flow
 
 
 class TestQueryBuilder:

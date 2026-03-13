@@ -24,16 +24,16 @@
 
 ```bash
 # 使用uv安装依赖
-uv add perfetto
+uv add perfetto-trace-dsl
 
 # 或者使用pip
-pip install perfetto
+pip install perfetto-trace-dsl
 ```
 
 ### 基本使用
 
 ```python
-from perfetto.dsl import Trace
+from perfetto_trace_dsl import Trace
 
 # 打开trace文件
 with Trace("trace_file.pftrace") as trace:
@@ -466,7 +466,7 @@ max_duration = query.max('duration')
 
 ```
 perfetto-dsl/
-├── perfetto/              # 主包目录
+├── perfetto_trace_dsl/    # 主包目录
 │   ├── __init__.py       # 包初始化文件
 │   └── dsl/              # DSL子包
 │       ├── __init__.py   # DSL包初始化
@@ -573,7 +573,7 @@ print(f"CPU使用率: {usage*100:.2f}%")  # 输出: CPU使用率: 54.84%
 ### 完整示例
 
 ```python
-from perfetto.dsl import Trace
+from perfetto_trace_dsl import Trace
 
 with Trace("trace_file.pftrace") as trace:
     # 使用高级语法和args过滤的组合查询
