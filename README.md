@@ -490,6 +490,34 @@ uv run pytest tests/ -v
 uv run pytest tests/test_basic_functionality.py -v
 ```
 
+## 🤖 GitHub Actions CI/CD（Self-hosted Runner）
+
+仓库新增了两条 GitHub Actions 工作流：
+
+- `.github/workflows/ci.yml`  
+  在 `push` / `pull_request` / `workflow_dispatch` 时触发，执行测试、打包和包元数据校验。
+- `.github/workflows/publish-pypi.yml`  
+  在 `release published` 时自动发布到 PyPI；也支持手动触发并选择发布到 `pypi` 或 `testpypi`。
+
+### Runner 要求
+
+工作流使用以下 runner 标签：
+
+- `self-hosted`
+- `linux`
+
+请确保你的自建 GitHub Actions runner 至少带有以上标签，并可访问外网安装依赖与上传包。
+
+### 必需 Secrets
+
+- `PYPI_TOKEN`：PyPI API Token（发布到正式 PyPI）
+- `TEST_PYPI_API_TOKEN`：TestPyPI API Token（手动发布到 TestPyPI 时使用）
+
+### 发布方式
+
+1. 自动发布：创建 GitHub Release 并发布后，工作流会自动上传到 PyPI。  
+2. 手动发布：在 Actions 页面运行 `Publish package`，并在 `target` 里选择 `pypi` 或 `testpypi`。
+
 ## 🔧 技术特点
 
 - **基于Perfetto官方文档**: 严格按照Perfetto SQL表结构设计
