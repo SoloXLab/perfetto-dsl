@@ -1,9 +1,9 @@
 name: Publish package
 
 on:
-  release:
-    types:
-      - published
+  push:
+    tags:
+      - "v*"
   workflow_dispatch:
     inputs:
       target:
@@ -52,7 +52,7 @@ jobs:
           python -m twine check dist/*
 
       - name: Publish to PyPI
-        if: ${{ github.event_name == 'release' || inputs.target == 'pypi' }}
+        if: ${{ github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.target == 'pypi') }}
         env:
           TWINE_USERNAME: __token__
           TWINE_PASSWORD: ${{ secrets.PYPI_TOKEN }}
