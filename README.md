@@ -510,7 +510,7 @@ uv run pytest tests/test_basic_functionality.py -v
 
 ### 必需 Secrets
 
-- `PYPI_API_TOKEN`：PyPI API Token（发布到正式 PyPI）
+- `PYPI_TOKEN`：PyPI API Token（发布到正式 PyPI）
 - `TEST_PYPI_API_TOKEN`：TestPyPI API Token（手动发布到 TestPyPI 时使用）
 
 ### 发布方式
