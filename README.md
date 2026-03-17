@@ -497,7 +497,7 @@ uv run pytest tests/test_basic_functionality.py -v
 - `.github/workflows/ci.yml`  
   在 `push` / `pull_request` / `workflow_dispatch` 时触发，执行测试、打包和包元数据校验。
 - `.github/workflows/auto-tag-on-main.yml`  
-  在 `main` 分支收到 push 后触发，仅当该提交关联到已合并 PR 时自动创建下一个语义化 patch tag（例如 `v1.2.3 -> v1.2.4`）。
+  在 `CI` 工作流于 `main` 分支成功完成后触发，仅当该提交关联到已合并 PR 时自动创建下一个语义化 patch tag（例如 `v1.2.3 -> v1.2.4`）。
 - `.github/workflows/publish-pypi.yml`  
   在 `v*` tag push 时自动发布到 PyPI；也支持手动触发并选择发布到 `pypi` 或 `testpypi`。
 
@@ -517,7 +517,7 @@ uv run pytest tests/test_basic_functionality.py -v
 
 ### 发布方式
 
-1. 自动发布：PR 合入 `main` 后会自动更新 tag，tag push 会触发 `Publish package` 并上传到 PyPI。  
+1. 自动发布：PR 合入 `main` 后先执行 `CI`（测试通过），然后自动更新 tag，tag push 会触发 `Publish package` 并上传到 PyPI。  
 2. 手动发布：在 Actions 页面运行 `Publish package`，并在 `target` 里选择 `pypi` 或 `testpypi`。
 
 ## 🔧 技术特点
