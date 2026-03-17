@@ -1,0 +1,89 @@
+name: Auto tag on merged PR
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: write
+  pull-requests: read
+
+concurrency:
+  group: auto-tag-main
+  cancel-in-progress: false
+
+jobs:
+  auto-tag:
+    name: Create next semantic version tag
+    runs-on:
+      - self-hosted
+      - linux
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check commit is from merged PR
+        id: pr_check
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+            const commit_sha = context.sha;
+            const response = await github.request(
+              "GET /repos/{owner}/{repo}/commits/{commit_sha}/pulls",
+              {
+                owner,
+                repo,
+                commit_sha,
+                mediaType: { previews: ["groot"] }
+              }
+            );
+
+            const mergedPr = response.data.find((pr) => Boolean(pr.merged_at));
+            core.setOutput("is_merged_pr", mergedPr ? "true" : "false");
+            core.setOutput("pr_number", mergedPr ? String(mergedPr.number) : "");
+
+      - name: Skip non-PR main pushes
+        if: ${{ steps.pr_check.outputs.is_merged_pr != 'true' }}
+        run: echo "Push is not associated with a merged PR, skip tagging."
+
+      - name: Compute next patch tag
+        id: next_tag
+        if: ${{ steps.pr_check.outputs.is_merged_pr == 'true' }}
+        run: |
+          git fetch --tags --force
+          latest_tag="$(git tag --list 'v*' --sort=-v:refname | head -n 1)"
+
+          if [ -z "${latest_tag}" ]; then
+            next_tag="v0.1.0"
+          else
+            if [[ ! "${latest_tag}" =~ ^v([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
+              echo "Latest tag '${latest_tag}' does not match vMAJOR.MINOR.PATCH format."
+              exit 1
+            fi
+            major="${BASH_REMATCH[1]}"
+            minor="${BASH_REMATCH[2]}"
+            patch="${BASH_REMATCH[3]}"
+            next_tag="v${major}.${minor}.$((patch + 1))"
+          fi
+
+          echo "next_tag=${next_tag}" >> "$GITHUB_OUTPUT"
+
+      - name: Create and push tag
+        if: ${{ steps.pr_check.outputs.is_merged_pr == 'true' }}
+        env:
+          NEXT_TAG: ${{ steps.next_tag.outputs.next_tag }}
+          PR_NUMBER: ${{ steps.pr_check.outputs.pr_number }}
+        run: |
+          if git rev-parse "${NEXT_TAG}" >/dev/null 2>&1; then
+            echo "Tag ${NEXT_TAG} already exists, skip."
+            exit 0
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "${NEXT_TAG}" -m "Release ${NEXT_TAG} (PR #${PR_NUMBER})"
+          git push origin "${NEXT_TAG}"
