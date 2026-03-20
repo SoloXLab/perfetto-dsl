@@ -477,16 +477,18 @@ class FlowLinkQueryBuilder:
         self._invalidate_cache()
         return self
 
-    def series(self) -> List[FlowLink]:
+    def all(self) -> List[FlowLink]:
+        """获取全部结果，默认按 peer.ts ASC（时间升序）"""
         if self.order_by_clause is None:
             self.order_by_clause = "peer.ts ASC"
+            self._invalidate_cache()
         return self._execute_query()
 
     def first(self) -> Optional[FlowLink]:
         return self.nth(0)
 
     def nth(self, n: int) -> Optional[FlowLink]:
-        links = self.series()
+        links = self.all()
         if not links:
             return None
         if n < 0:
@@ -505,7 +507,7 @@ class FlowLinkQueryBuilder:
         return self.nth(-1)
 
     def count(self) -> int:
-        return len(self.series())
+        return len(self.all())
 
     def _build_sql(self) -> str:
         peer_join = "JOIN slice peer ON flow.slice_in = peer.id" if self.direction == "out" else "JOIN slice peer ON flow.slice_out = peer.id"

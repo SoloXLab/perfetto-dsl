@@ -152,7 +152,7 @@ def test_openspec_flow_link_query_from_slice():
         ],
     ]
 
-    links = source.flow_out().name("frame_render").series()
+    links = source.flow_out().name("frame_render").all()
 
     assert len(links) == 1
     assert isinstance(links[0], FlowLink)
