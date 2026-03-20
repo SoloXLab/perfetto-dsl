@@ -168,10 +168,15 @@ class CounterQueryBuilder:
         """限制结果数量"""
         self.limit_count = count
         return self
+
+    def _invalidate_cache(self):
+        self._executed = False
+        self._results = None
     
     def order_by(self, clause: str) -> 'CounterQueryBuilder':
         """添加排序条件"""
         self.order_by_clause = clause
+        self._invalidate_cache()
         return self
     
     def _execute_query(self) -> List[Counter]:
@@ -205,24 +210,56 @@ class CounterQueryBuilder:
         except Exception as e:
             raise RuntimeError(f"Failed to execute counter query: {e}")
     
-    def first(self) -> Optional[Counter]:
-        """获取第一个结果"""
-        results = self._execute_query()
-        return results[0] if results else None
-    
-    def last(self) -> Optional[Counter]:
-        """获取最后一个结果"""
-        results = self._execute_query()
-        return results[-1] if results else None
-    
     def all(self) -> List[Counter]:
-        """获取所有结果"""
+        """获取全部结果，默认按 counter.ts ASC（时间升序）"""
+        if self.order_by_clause is None:
+            self.order_by_clause = "counter.ts ASC"
+            self._invalidate_cache()
         return self._execute_query()
+
+    def nth(self, n: int) -> Optional[Counter]:
+        """返回第n个结果（0-based，支持负索引）"""
+        results = self.all()
+        if not results:
+            return None
+        if n < 0:
+            n = len(results) + n
+        if n < 0 or n >= len(results):
+            return None
+        return results[n]
+
+    def first(self) -> Optional[Counter]:
+        """获取第一个结果（时间升序）"""
+        return self.nth(0)
+
+    def second(self) -> Optional[Counter]:
+        return self.nth(1)
+
+    def third(self) -> Optional[Counter]:
+        return self.nth(2)
+
+    def last(self) -> Optional[Counter]:
+        """获取最后一个结果（时间升序）"""
+        return self.nth(-1)
     
     def count(self) -> int:
-        """获取结果数量"""
-        results = self._execute_query()
-        return len(results)
+        """获取结果数量（使用 SQL COUNT，高效）"""
+        sql = """
+        SELECT COUNT(*) as counter_count
+        FROM counter
+        LEFT JOIN counter_track ON counter.track_id = counter_track.id
+        LEFT JOIN process_counter_track ON counter_track.id = process_counter_track.id
+        LEFT JOIN process ON process_counter_track.upid = process.upid
+        """
+        if self.where_conditions:
+            sql += " WHERE " + " AND ".join(self.where_conditions)
+        try:
+            result = self.trace_processor.query(sql)
+            for row in result:
+                return getattr(row, 'counter_count', 0)
+            return 0
+        except Exception as e:
+            raise RuntimeError(f"Failed to execute counter count query: {e}")
     
     def max(self, field: str = 'value') -> Optional[float]:
         """获取指定字段的最大值"""
@@ -304,14 +341,12 @@ class CounterQueryBuilder:
             return sum(values) / len(values)
     
     def __iter__(self):
-        """支持迭代"""
-        results = self._execute_query()
-        return iter(results)
+        """支持迭代（时间升序）"""
+        return iter(self.all())
     
     def __getitem__(self, index):
-        """支持索引访问"""
-        results = self._execute_query()
-        return results[index]
+        """支持索引访问（时间升序）"""
+        return self.all()[index]
     
     def __len__(self):
         """支持len()函数"""
