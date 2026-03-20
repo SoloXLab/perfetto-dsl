@@ -2657,14 +2657,14 @@ class SliceQueryBuilder:
         results = self._execute_query()
         return len(results) > 0
     
-    def first(self):
+    def first(self) -> Optional['Slice']:
         """获取第一个结果（时间升序）"""
         return self.nth(0)
-    
-    def last(self):
+
+    def last(self) -> Optional['Slice']:
         """获取最后一个结果（时间升序）"""
         return self.nth(-1)
-    
+
     def all(self):
         """获取所有结果"""
         return self._execute_query()
@@ -2676,7 +2676,7 @@ class SliceQueryBuilder:
             self._invalidate_cache()
         return self._execute_query()
 
-    def nth(self, n: int):
+    def nth(self, n: int) -> Optional['Slice']:
         """返回第n个结果（0-based，支持负索引）"""
         results = self.series()
         if not results:
@@ -2687,10 +2687,10 @@ class SliceQueryBuilder:
             return None
         return results[n]
 
-    def second(self):
+    def second(self) -> Optional['Slice']:
         return self.nth(1)
 
-    def third(self):
+    def third(self) -> Optional['Slice']:
         return self.nth(2)
     
     def _counter_max(self, field: str = 'value') -> float:
