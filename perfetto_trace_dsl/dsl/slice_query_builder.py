@@ -1344,10 +1344,6 @@ class SliceQueryBuilder:
         results = self._execute_query()
         return results[-1] if results else None
     
-    def all(self) -> List:
-        """获取所有结果"""
-        return self._execute_query()
-    
     def count(self) -> int:
         """
         获取查询结果的数量
@@ -2666,11 +2662,7 @@ class SliceQueryBuilder:
         return self.nth(-1)
     
     def all(self):
-        """获取所有结果"""
-        return self._execute_query()
-
-    def series(self):
-        """返回时间升序结果列表"""
+        """获取全部结果，默认按 ts ASC（时间升序）"""
         if self.current_table in {"slice", "slice_out", "slice_in"} and self.order_by_clause is None:
             self.order_by_clause = f"{self.current_table}.ts ASC"
             self._invalidate_cache()
@@ -2678,7 +2670,7 @@ class SliceQueryBuilder:
 
     def nth(self, n: int):
         """返回第n个结果（0-based，支持负索引）"""
-        results = self.series()
+        results = self.all()
         if not results:
             return None
         if n < 0:
@@ -2931,7 +2923,7 @@ class SliceQueryBuilder:
     def to_list(self, attr_or_arg: str) -> List[Any]:
         if self.current_table != "slice":
             raise ValueError("to_list() method is only available for slice queries")
-        slices = self.series()
+        slices = self.all()
         return [self._resolve_slice_attr_or_arg(item, attr_or_arg) for item in slices]
 
     def count(self) -> int:

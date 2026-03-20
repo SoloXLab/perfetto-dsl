@@ -89,7 +89,7 @@ def test_openspec_series_and_position_helpers():
     s3 = _make_slice(3, 3000, 100)
     builder._execute_query = lambda: [s1, s2, s3]
 
-    assert [s.id for s in builder.series()] == [1, 2, 3]
+    assert [s.id for s in builder.all()] == [1, 2, 3]
     assert builder.first().id == 1
     assert builder.second().id == 2
     assert builder.third().id == 3
